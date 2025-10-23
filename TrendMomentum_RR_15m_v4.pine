@@ -1,0 +1,219 @@
+//@version=4
+study("15m Trend-Momentum RR Setups (v4)", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// =====================================================================
+// Model: Trend + Pullback (EMA) + Structure Break
+// - Trend filter: EMA(50) > EMA(200) for longs, EMA(50) < EMA(200) for shorts
+// - Pullback: recent swing (pivot) into/near EMA(50)
+// - Structure Break (BOS): close crosses beyond the most recent opposite swing
+// - Risk: ATR-based stop below/above pivot; targets at fixed Risk:Reward multiples
+// Notes:
+// - Signals are confirmed on bar close to avoid flicker/repaints
+// - Drawings (lines/labels) are created once per signal and remain static
+// - Designed and validated for 15m context; can be used on other TFs at own risk
+// =====================================================================
+
+// ------------------------- Inputs -------------------------------------
+emaFastLen   = input(title="Fast EMA Length",    type=input.integer, defval=50, minval=1)
+emaSlowLen   = input(title="Slow EMA Length",    type=input.integer, defval=200, minval=1)
+pivotLeft    = input(title="Pivot Left Bars",    type=input.integer, defval=3, minval=1, maxval=10)
+pivotRight   = input(title="Pivot Right Bars",   type=input.integer, defval=3, minval=1, maxval=10)
+atrLen       = input(title="ATR Length",         type=input.integer, defval=14, minval=1)
+slAtrMult    = input(title="SL Buffer (x ATR)",  type=input.float,   defval=0.5, minval=0.0, step=0.1)
+rr1          = input(title="Target RR #1",       type=input.float,   defval=1.5, minval=0.1, step=0.1)
+rr2          = input(title="Target RR #2",       type=input.float,   defval=2.0, minval=0.1, step=0.1)
+useRR2       = input(title="Show Target #2",     type=input.bool,    defval=true)
+barsRight    = input(title="Bars Width of Drawing", type=input.integer, defval=30, minval=5, maxval=300)
+proximityATR = input(title="Pivot-EMA Proximity (x ATR)", type=input.float, defval=0.75, minval=0.0, step=0.05)
+minRR        = input(title="Minimum RR to Accept", type=input.float, defval=1.2, minval=0.5, step=0.1)
+confirmRSI   = input(title="Require RSI(14) > 50 for Long / < 50 for Short", type=input.bool, defval=true)
+
+showEMAs     = input(title="Show EMAs", type=input.bool, defval=true)
+showSignals  = input(title="Show Entry Arrows", type=input.bool, defval=true)
+
+// ----------------------- Core calculations ----------------------------
+emaFast = ema(close, emaFastLen)
+emaSlow = ema(close, emaSlowLen)
+atrVal  = atr(atrLen)
+rsiVal  = rsi(close, 14)
+
+// Plot EMAs for context
+plot(showEMAs ? emaFast : na, title="EMA Fast", color=color.teal, linewidth=2)
+plot(showEMAs ? emaSlow : na, title="EMA Slow", color=color.orange, linewidth=2)
+
+// ----------------------- Swing (pivot) logic --------------------------
+pl = pivotlow(low, pivotLeft, pivotRight)     // pivot low price appears at the pivot bar when confirmed
+ph = pivothigh(high, pivotLeft, pivotRight)   // pivot high price appears at the pivot bar when confirmed
+
+var float lastSwingLow  = na
+var int   lastSwingLowI = na
+var float lastSwingHigh = na
+var int   lastSwingHighI= na
+
+// Update swing lows when a pivot low confirms
+if not na(pl)
+    lastSwingLow  := pl
+    lastSwingLowI := bar_index - pivotRight
+
+// Update swing highs when a pivot high confirms
+if not na(ph)
+    lastSwingHigh  := ph
+    lastSwingHighI := bar_index - pivotRight
+
+// ----------------------- Pullback readiness ---------------------------
+// We mark readiness when a qualifying pullback pivot prints near EMAFast in the direction of trend
+var bool longReady  = false
+var bool shortReady = false
+
+// Determine EMA and ATR at pivot confirmation time
+emaFastAtPL = emaFast[pivotRight]
+emaSlowAtPL = emaSlow[pivotRight]
+atrAtPL     = atrVal[pivotRight]
+emaFastAtPH = emaFast[pivotRight]
+emaSlowAtPH = emaSlow[pivotRight]
+atrAtPH     = atrVal[pivotRight]
+
+// Long readiness: uptrend at pivot low, pivot near EMAFast, and pivot low is the most recent swing
+if not na(pl)
+    isUpTrendAtPL   = emaFastAtPL > emaSlowAtPL
+    nearEmaAtPL     = abs(pl - emaFastAtPL) <= proximityATR * atrAtPL
+    lowAfterHigh    = na(lastSwingHighI) or (bar_index - pivotRight > lastSwingHighI)
+    longReady       := isUpTrendAtPL and nearEmaAtPL and lowAfterHigh
+
+// Short readiness: downtrend at pivot high, pivot near EMAFast, and pivot high is the most recent swing
+if not na(ph)
+    isDnTrendAtPH   = emaFastAtPH < emaSlowAtPH
+    nearEmaAtPH     = abs(ph - emaFastAtPH) <= proximityATR * atrAtPH
+    highAfterLow    = na(lastSwingLowI) or (bar_index - pivotRight > lastSwingLowI)
+    shortReady      := isDnTrendAtPH and nearEmaAtPH and highAfterLow
+
+// ----------------------- Break-of-Structure (BOS) ---------------------
+// Use true cross beyond the most recent opposite swing to avoid repeat firing
+longBreakCross  = not na(lastSwingHigh) and crossover(close, lastSwingHigh)
+shortBreakCross = not na(lastSwingLow)  and crossunder(close, lastSwingLow)
+
+// Confirm on bar close: trigger on the next bar open using prior-bar signal
+longTriggerOnOpen  = (nz(longReady[1])  and nz(longBreakCross[1]))  and barstate.isnew
+shortTriggerOnOpen = (nz(shortReady[1]) and nz(shortBreakCross[1])) and barstate.isnew
+
+// RSI confirmation (optional)
+longRSIok  = not confirmRSI or rsiVal[1] > 50
+shortRSIok = not confirmRSI or rsiVal[1] < 50
+
+// Final triggers
+doLong  = longTriggerOnOpen  and longRSIok
+doShort = shortTriggerOnOpen and shortRSIok
+
+// ----------------------- Utility functions ----------------------------
+f_roundToTick(_p) => round(_p / syminfo.mintick) * syminfo.mintick
+
+f_makeLongLevels(_entry, _pivot, _atr) =>
+    risk     = max(_entry - (_pivot - slAtrMult * _atr), syminfo.mintick)
+    sl       = _entry - risk
+    tp1      = _entry + rr1 * risk
+    tp2      = _entry + rr2 * risk
+    [f_roundToTick(sl), f_roundToTick(tp1), f_roundToTick(tp2), risk]
+
+f_makeShortLevels(_entry, _pivot, _atr) =>
+    risk     = max((_pivot + slAtrMult * _atr) - _entry, syminfo.mintick)
+    sl       = _entry + risk
+    tp1      = _entry - rr1 * risk
+    tp2      = _entry - rr2 * risk
+    [f_roundToTick(sl), f_roundToTick(tp1), f_roundToTick(tp2), risk]
+
+// ----------------------- Drawing management ---------------------------
+var int   maxSignals = 20
+var linesSL   = array.new_line()
+var linesEN   = array.new_line()
+var linesTP1  = array.new_line()
+var linesTP2  = array.new_line()
+var sigLabels = array.new_label()
+
+f_trimArrays() =>
+    while array.size(linesSL) > maxSignals
+        l = array.shift(linesSL)
+        line.delete(l)
+    while array.size(linesEN) > maxSignals
+        l = array.shift(linesEN)
+        line.delete(l)
+    while array.size(linesTP1) > maxSignals
+        l = array.shift(linesTP1)
+        line.delete(l)
+    while array.size(linesTP2) > maxSignals
+        l = array.shift(linesTP2)
+        line.delete(l)
+    while array.size(sigLabels) > maxSignals
+        lb = array.shift(sigLabels)
+        label.delete(lb)
+
+f_drawPosition(_isLong, _sigIndex, _entry, _sl, _tp1, _tp2, _riskR, _rr1, _rr2, _useRR2) =>
+    colEN = _isLong ? color.new(color.lime, 0) : color.new(color.red, 0)
+    colSL = color.new(color.maroon, 0)
+    colTP = color.new(color.green, 0)
+    x1 = _sigIndex
+    x2 = _sigIndex + barsRight
+    lEN = line.new(x1, _entry, x2, _entry, xloc=xloc.bar_index, extend=extend.none, color=colEN, width=2, style=line.style_solid)
+    lSL = line.new(x1, _sl,    x2, _sl,    xloc=xloc.bar_index, extend=extend.none, color=colSL, width=2, style=line.style_dotted)
+    lT1 = line.new(x1, _tp1,   x2, _tp1,   xloc=xloc.bar_index, extend=extend.none, color=colTP, width=2, style=line.style_solid)
+    lT2 = na
+    if _useRR2
+        lT2 := line.new(x1, _tp2, x2, _tp2, xloc=xloc.bar_index, extend=extend.none, color=color.new(color.green, 0), width=1, style=line.style_dashed)
+    // Info label
+    rrTxt = _isLong ? "LONG" : "SHORT"
+    rrStr = "R:R1=" + tostring(_rr1, format.mintick) + ( _useRR2 ? ", R:R2=" + tostring(_rr2, format.mintick) : "" )
+    riskP = tostring(_riskR / _entry * 100.0, format.percent)
+    txt   = rrTxt + "\nEntry: " + tostring(_entry) + "\nSL: " + tostring(_sl) + "\nTP1: " + tostring(_tp1) + ( _useRR2 ? "\nTP2: " + tostring(_tp2) : "" ) + "\n" + rrStr
+    lb    = label.new(x2, _entry, text=txt, xloc=xloc.bar_index, yloc=yloc.price, color=color.new(color.black, 0), style=label.style_label_left, textcolor=color.white, size=size.small)
+    // Store references
+    array.push(linesEN, lEN)
+    array.push(linesSL, lSL)
+    array.push(linesTP1, lT1)
+    if _useRR2 and not na(lT2)
+        array.push(linesTP2, lT2)
+    array.push(sigLabels, lb)
+    f_trimArrays()
+
+// ----------------------- Entry execution ------------------------------
+// Only draw when risk:reward meets minimum threshold
+longPivotOk  = not na(lastSwingLow)
+shortPivotOk = not na(lastSwingHigh)
+
+if doLong and longPivotOk
+    entry  = f_roundToTick(close[1])
+    sl1    = na
+    tp1    = na
+    tp2    = na
+    riskR  = na
+    // Use previous swing value if available; otherwise fall back to current stored swing
+    longStopPivot = na(lastSwingLow[1]) ? lastSwingLow : lastSwingLow[1]
+    [sl1, tp1, tp2, riskR] := f_makeLongLevels(entry, longStopPivot, atrVal[1])
+    rrOK = (tp1 - entry) / (entry - sl1) >= minRR
+    if rrOK
+        f_drawPosition(true, bar_index, entry, sl1, tp1, tp2, (entry - sl1), rr1, rr2, useRR2)
+        if showSignals
+            plotshape(true, title="Long Signal", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.tiny, offset=0)
+
+if doShort and shortPivotOk
+    entry  = f_roundToTick(close[1])
+    sl1    = na
+    tp1    = na
+    tp2    = na
+    riskR  = na
+    // Use previous swing value if available; otherwise fall back to current stored swing
+    shortStopPivot = na(lastSwingHigh[1]) ? lastSwingHigh : lastSwingHigh[1]
+    [sl1, tp1, tp2, riskR] := f_makeShortLevels(entry, shortStopPivot, atrVal[1])
+    rrOK = (entry - tp1) / (sl1 - entry) >= minRR
+    if rrOK
+        f_drawPosition(false, bar_index, entry, sl1, tp1, tp2, (sl1 - entry), rr1, rr2, useRR2)
+        if showSignals
+            plotshape(true, title="Short Signal", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.tiny, offset=0)
+
+// ----------------------- Alerts ---------------------------------------
+alertcondition(doLong,  title="Long Setup (confirmed)",  message="Long setup confirmed on {{ticker}} 15m. See drawn Entry/SL/TP.")
+alertcondition(doShort, title="Short Setup (confirmed)", message="Short setup confirmed on {{ticker}} 15m. See drawn Entry/SL/TP.")
+
+// ----------------------- Info banner ----------------------------------
+// Label with timeframe guidance, plotted only on the first visible bar
+showInfo = barstate.isfirst
+if showInfo
+    label.new(bar_index, high, text="15m Trend-Momentum RR Setups (v4)\nBest used on 15-minute charts.\nSignals confirm on bar close.", xloc=xloc.bar_index, yloc=yloc.abovebar, color=color.gray, style=label.style_label_down, textcolor=color.white, size=size.small)
