@@ -1,0 +1,264 @@
+//@version=4
+study("Advanced Trade Setup Indicator", shorttitle="ATSI", overlay=true, max_boxes_count=500, max_lines_count=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// INPUT PARAMETERS
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Risk Management Settings
+risk_reward_ratio = input(2.0, title="Risk/Reward Ratio", minval=1.0, maxval=5.0, step=0.1)
+atr_multiplier_sl = input(1.5, title="ATR Multiplier for Stop Loss", minval=0.5, maxval=3.0, step=0.1)
+atr_multiplier_tp = input(3.0, title="ATR Multiplier for Take Profit", minval=1.0, maxval=6.0, step=0.1)
+
+// RSI Settings
+rsi_length = input(14, title="RSI Length", minval=5, maxval=50)
+rsi_overbought = input(70, title="RSI Overbought Level", minval=60, maxval=90)
+rsi_oversold = input(30, title="RSI Oversold Level", minval=10, maxval=40)
+
+// Moving Average Settings
+ma_fast_length = input(9, title="Fast MA Length", minval=5, maxval=50)
+ma_slow_length = input(21, title="Slow MA Length", minval=10, maxval=100)
+
+// SMC Settings
+order_block_length = input(10, title="Order Block Lookback", minval=5, maxval=50)
+liquidity_threshold = input(1.5, title="Liquidity Zone Threshold", minval=1.0, maxval=3.0, step=0.1)
+
+// Volume Settings
+volume_ma_length = input(20, title="Volume MA Length", minval=10, maxval=50)
+volume_multiplier = input(1.5, title="Volume Spike Multiplier", minval=1.0, maxval=3.0, step=0.1)
+
+// Visual Settings
+show_long_positions = input(true, title="Show Long Position Boxes")
+show_short_positions = input(true, title="Show Short Position Boxes")
+show_order_blocks = input(true, title="Show Order Blocks")
+show_liquidity_zones = input(true, title="Show Liquidity Zones")
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// TECHNICAL INDICATORS CALCULATION
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ATR for dynamic stop loss and take profit
+atr = atr(14)
+
+// RSI for momentum confirmation
+rsi = rsi(close, rsi_length)
+
+// Moving Averages for trend confirmation
+ma_fast = ema(close, ma_fast_length)
+ma_slow = ema(close, ma_slow_length)
+
+// Volume analysis
+volume_ma = sma(volume, volume_ma_length)
+volume_spike = volume > volume_ma * volume_multiplier
+
+// Higher timeframe trend (using security function for 1H trend on 15m chart)
+htf_trend = security(syminfo.tickerid, "60", close > ema(close, 50))
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// SMART MONEY CONCEPTS (SMC) IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Order Block Detection
+is_bullish_ob = low[2] > low[1] and low[1] < low and high[1] < high and close > high[1]
+is_bearish_ob = high[2] < high[1] and high[1] > high and low[1] > low and close < low[1]
+
+// Fair Value Gap (FVG) Detection
+bullish_fvg = low > high[2] and close[1] > high[2]
+bearish_fvg = high < low[2] and close[1] < low[2]
+
+// Liquidity Zones (Previous highs and lows)
+prev_high = highest(high, order_block_length)
+prev_low = lowest(low, order_block_length)
+
+// Break of Structure (BOS)
+higher_high = high > highest(high[1], order_block_length)
+lower_low = low < lowest(low[1], order_block_length)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// ICT CONCEPTS IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Institutional Candle Pattern
+institutional_bullish = close > open and (high - close) < (close - open) * 0.3 and (close - low) > (close - open) * 0.7
+institutional_bearish = close < open and (close - low) < (open - close) * 0.3 and (high - close) > (open - close) * 0.7
+
+// Market Structure Shift
+bullish_structure = close > ma_fast and ma_fast > ma_slow and rsi > 50
+bearish_structure = close < ma_fast and ma_fast < ma_slow and rsi < 50
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// TRADE SETUP LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Long Setup Conditions
+long_trend_condition = htf_trend and bullish_structure
+long_momentum_condition = rsi < rsi_overbought and rsi > 40
+long_smc_condition = is_bullish_ob or bullish_fvg
+long_volume_condition = volume_spike
+long_pattern_condition = institutional_bullish
+
+// Combined Long Signal
+long_signal = long_trend_condition and long_momentum_condition and long_smc_condition and long_volume_condition and long_pattern_condition
+
+// Short Setup Conditions  
+short_trend_condition = not htf_trend and bearish_structure
+short_momentum_condition = rsi > rsi_oversold and rsi < 60
+short_smc_condition = is_bearish_ob or bearish_fvg
+short_volume_condition = volume_spike
+short_pattern_condition = institutional_bearish
+
+// Combined Short Signal
+short_signal = short_trend_condition and short_momentum_condition and short_smc_condition and short_volume_condition and short_pattern_condition
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// RISK MANAGEMENT CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Dynamic Stop Loss and Take Profit based on ATR
+long_entry = close
+long_stop_loss = long_entry - (atr * atr_multiplier_sl)
+long_take_profit = long_entry + (atr * atr_multiplier_tp)
+
+short_entry = close  
+short_stop_loss = short_entry + (atr * atr_multiplier_sl)
+short_take_profit = short_entry - (atr * atr_multiplier_tp)
+
+// Risk/Reward Validation
+long_rr_valid = (long_take_profit - long_entry) / (long_entry - long_stop_loss) >= risk_reward_ratio
+short_rr_valid = (short_entry - short_take_profit) / (short_stop_loss - short_entry) >= risk_reward_ratio
+
+// Final Signal Validation
+validated_long_signal = long_signal and long_rr_valid
+validated_short_signal = short_signal and short_rr_valid
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// POSITION BOXES AND VISUAL ELEMENTS
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Long Position Box
+if validated_long_signal and show_long_positions
+    // Entry box
+    entry_box = box.new(bar_index, long_entry, bar_index + 10, long_take_profit, 
+                       border_color=color.green, bgcolor=color.new(color.green, 85), 
+                       border_width=2, text="LONG\nEntry: " + tostring(long_entry, "#.##") + 
+                       "\nSL: " + tostring(long_stop_loss, "#.##") + 
+                       "\nTP: " + tostring(long_take_profit, "#.##"), 
+                       text_color=color.white, text_size=size.small)
+    
+    // Stop Loss Line
+    sl_line = line.new(bar_index, long_stop_loss, bar_index + 10, long_stop_loss, 
+                      color=color.red, width=2, style=line.style_dashed)
+    
+    // Take Profit Line  
+    tp_line = line.new(bar_index, long_take_profit, bar_index + 10, long_take_profit, 
+                      color=color.green, width=2, style=line.style_dashed)
+
+// Short Position Box
+if validated_short_signal and show_short_positions
+    // Entry box
+    entry_box = box.new(bar_index, short_entry, bar_index + 10, short_take_profit, 
+                       border_color=color.red, bgcolor=color.new(color.red, 85), 
+                       border_width=2, text="SHORT\nEntry: " + tostring(short_entry, "#.##") + 
+                       "\nSL: " + tostring(short_stop_loss, "#.##") + 
+                       "\nTP: " + tostring(short_take_profit, "#.##"), 
+                       text_color=color.white, text_size=size.small)
+    
+    // Stop Loss Line
+    sl_line = line.new(bar_index, short_stop_loss, bar_index + 10, short_stop_loss, 
+                      color=color.red, width=2, style=line.style_dashed)
+    
+    // Take Profit Line
+    tp_line = line.new(bar_index, short_take_profit, bar_index + 10, short_take_profit, 
+                      color=color.green, width=2, style=line.style_dashed)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// ORDER BLOCKS AND LIQUIDITY ZONES VISUALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Bullish Order Block
+if is_bullish_ob and show_order_blocks
+    ob_box = box.new(bar_index[1], low[1], bar_index + 5, high[1], 
+                    border_color=color.blue, bgcolor=color.new(color.blue, 90), 
+                    border_width=1, text="Bull OB", text_color=color.blue, text_size=size.tiny)
+
+// Bearish Order Block  
+if is_bearish_ob and show_order_blocks
+    ob_box = box.new(bar_index[1], low[1], bar_index + 5, high[1], 
+                    border_color=color.orange, bgcolor=color.new(color.orange, 90), 
+                    border_width=1, text="Bear OB", text_color=color.orange, text_size=size.tiny)
+
+// Liquidity Zones
+if show_liquidity_zones
+    if higher_high
+        liq_line = line.new(bar_index, high, bar_index + 20, high, 
+                           color=color.yellow, width=1, style=line.style_dotted)
+        liq_label = label.new(bar_index, high, text="Liquidity", color=color.yellow, 
+                             textcolor=color.black, size=size.tiny, style=label.style_label_down)
+    
+    if lower_low
+        liq_line = line.new(bar_index, low, bar_index + 20, low, 
+                           color=color.yellow, width=1, style=line.style_dotted)
+        liq_label = label.new(bar_index, low, text="Liquidity", color=color.yellow, 
+                             textcolor=color.black, size=size.tiny, style=label.style_label_up)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// ALERTS AND SIGNALS
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Plot signals for alert conditions
+plotshape(validated_long_signal, title="Long Signal", location=location.belowbar, 
+         color=color.green, style=shape.triangleup, size=size.normal, text="LONG")
+
+plotshape(validated_short_signal, title="Short Signal", location=location.abovebar, 
+         color=color.red, style=shape.triangledown, size=size.normal, text="SHORT")
+
+// Alert Conditions
+alertcondition(validated_long_signal, title="Long Trade Setup", 
+              message="LONG trade setup detected. Entry: {{close}}, SL: {{plot_01}}, TP: {{plot_02}}")
+
+alertcondition(validated_short_signal, title="Short Trade Setup", 
+              message="SHORT trade setup detected. Entry: {{close}}, SL: {{plot_01}}, TP: {{plot_02}}")
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// BACKGROUND AND TREND VISUALIZATION
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Background color based on higher timeframe trend
+bgcolor(htf_trend ? color.new(color.green, 95) : color.new(color.red, 95), title="HTF Trend Background")
+
+// Plot moving averages
+plot(ma_fast, color=color.blue, linewidth=1, title="Fast MA")
+plot(ma_slow, color=color.red, linewidth=1, title="Slow MA")
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// INFORMATION TABLE
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Create information table
+if barstate.islast
+    info_table = table.new(position.top_right, 2, 6, bgcolor=color.white, border_width=1)
+    
+    table.cell(info_table, 0, 0, "Indicator", text_color=color.black, bgcolor=color.gray)
+    table.cell(info_table, 1, 0, "Status", text_color=color.black, bgcolor=color.gray)
+    
+    table.cell(info_table, 0, 1, "HTF Trend", text_color=color.black)
+    table.cell(info_table, 1, 1, htf_trend ? "Bullish" : "Bearish", 
+              text_color=htf_trend ? color.green : color.red)
+    
+    table.cell(info_table, 0, 2, "RSI", text_color=color.black)
+    table.cell(info_table, 1, 2, tostring(rsi, "#.##"), text_color=color.black)
+    
+    table.cell(info_table, 0, 3, "ATR", text_color=color.black)
+    table.cell(info_table, 1, 3, tostring(atr, "#.####"), text_color=color.black)
+    
+    table.cell(info_table, 0, 4, "Volume", text_color=color.black)
+    table.cell(info_table, 1, 4, volume_spike ? "High" : "Normal", 
+              text_color=volume_spike ? color.orange : color.black)
+    
+    table.cell(info_table, 0, 5, "Structure", text_color=color.black)
+    table.cell(info_table, 1, 5, bullish_structure ? "Bullish" : "Bearish", 
+              text_color=bullish_structure ? color.green : color.red)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
+// END OF SCRIPT
+// ═══════════════════════════════════════════════════════════════════════════════════════════════════
