@@ -1,0 +1,359 @@
+//@version=4
+indicator("SMC ICT Trading Indicator", shorttitle="SMC ICT", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// INPUT PARAMETERS
+// ============================================================================
+
+// RSI Settings
+rsi_length = input(14, title="RSI Length", minval=1)
+rsi_overbought = input(70, title="RSI Overbought Level", minval=50, maxval=100)
+rsi_oversold = input(30, title="RSI Oversold Level", minval=0, maxval=50)
+
+// Moving Average Settings
+ema_fast = input(9, title="Fast EMA Length", minval=1)
+ema_slow = input(21, title="Slow EMA Length", minval=1)
+ema_trend = input(50, title="Trend EMA Length", minval=1)
+
+// Risk Management
+risk_reward_ratio = input(2.0, title="Risk Reward Ratio", minval=1.0, maxval=10.0)
+atr_multiplier = input(1.5, title="ATR Multiplier for Stop Loss", minval=0.5, maxval=5.0)
+atr_length = input(14, title="ATR Length", minval=1)
+
+// Visual Settings
+show_order_blocks = input(true, title="Show Order Blocks")
+show_fair_value_gaps = input(true, title="Show Fair Value Gaps")
+show_liquidity_levels = input(true, title="Show Liquidity Levels")
+show_signals = input(true, title="Show Entry Signals")
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+
+// RSI Calculation
+rsi = rsi(close, rsi_length)
+
+// Moving Averages
+ema9 = ema(close, ema_fast)
+ema21 = ema(close, ema_slow)
+ema50 = ema(close, ema_trend)
+
+// ATR for Risk Management
+atr = atr(atr_length)
+
+// Market Structure Analysis
+higher_high = high > high[1] and high[1] > high[2]
+lower_low = low < low[1] and low[1] < low[2]
+higher_low = low > low[1] and low[1] < low[2]
+lower_high = high < high[1] and high[1] > high[2]
+
+// Trend Analysis
+uptrend = ema9 > ema21 and ema21 > ema50
+downtrend = ema9 < ema21 and ema21 < ema50
+
+// ============================================================================
+// ORDER BLOCK DETECTION
+// ============================================================================
+
+// Bullish Order Block Detection
+is_bullish_ob = false
+bullish_ob_high = 0.0
+bullish_ob_low = 0.0
+
+// Bearish Order Block Detection
+is_bearish_ob = false
+bearish_ob_high = 0.0
+bearish_ob_low = 0.0
+
+// Simple Order Block Detection
+if barstate.isconfirmed
+    // Bullish Order Block: Strong bullish candle followed by consolidation
+    if close[2] > open[2] and (high[2] - low[2]) > (high[3] - low[3]) * 1.5
+        if close[1] < close[2] and close < close[2]
+            is_bullish_ob := true
+            bullish_ob_high := high[2]
+            bullish_ob_low := low[2]
+
+    // Bearish Order Block: Strong bearish candle followed by consolidation
+    if close[2] < open[2] and (high[2] - low[2]) > (high[3] - low[3]) * 1.5
+        if close[1] > close[2] and close > close[2]
+            is_bearish_ob := true
+            bearish_ob_high := high[2]
+            bearish_ob_low := low[2]
+
+// ============================================================================
+// FAIR VALUE GAP DETECTION
+// ============================================================================
+
+// Fair Value Gap Detection
+fvg_bullish = false
+fvg_bearish = false
+fvg_bullish_high = 0.0
+fvg_bullish_low = 0.0
+fvg_bearish_high = 0.0
+fvg_bearish_low = 0.0
+
+// Bullish FVG: Gap between low[2] and high[0]
+if low[2] > high[0] and close[1] > open[1]
+    fvg_bullish := true
+    fvg_bullish_high := low[2]
+    fvg_bullish_low := high[0]
+
+// Bearish FVG: Gap between high[2] and low[0]
+if high[2] < low[0] and close[1] < open[1]
+    fvg_bearish := true
+    fvg_bearish_high := high[2]
+    fvg_bearish_low := low[0]
+
+// ============================================================================
+// LIQUIDITY LEVELS
+// ============================================================================
+
+// Recent Highs and Lows for Liquidity
+recent_high = highest(high, 20)
+recent_low = lowest(low, 20)
+
+// ============================================================================
+// ENTRY SIGNAL LOGIC
+// ============================================================================
+
+// Long Entry Conditions
+long_condition = false
+long_signal = false
+
+// RSI Divergence for Long
+rsi_bullish_div = rsi < rsi_oversold and rsi > rsi[1] and close < close[1]
+
+// Long Entry: Uptrend + Order Block + RSI Oversold + FVG
+if uptrend and is_bullish_ob and rsi_bullish_div and fvg_bullish and close > bullish_ob_low
+    long_condition := true
+    long_signal := true
+
+// Short Entry Conditions
+short_condition = false
+short_signal = false
+
+// RSI Divergence for Short
+rsi_bearish_div = rsi > rsi_overbought and rsi < rsi[1] and close > close[1]
+
+// Short Entry: Downtrend + Order Block + RSI Overbought + FVG
+if downtrend and is_bearish_ob and rsi_bearish_div and fvg_bearish and close < bearish_ob_high
+    short_condition := true
+    short_signal := true
+
+// ============================================================================
+// RISK MANAGEMENT CALCULATIONS
+// ============================================================================
+
+// Long Position Risk Management
+long_entry_price = close
+long_stop_loss = long_entry_price - (atr * atr_multiplier)
+long_take_profit = long_entry_price + ((long_entry_price - long_stop_loss) * risk_reward_ratio)
+
+// Short Position Risk Management
+short_entry_price = close
+short_stop_loss = short_entry_price + (atr * atr_multiplier)
+short_take_profit = short_entry_price - ((short_stop_loss - short_entry_price) * risk_reward_ratio)
+
+// ============================================================================
+// POSITION TOOLS IMPLEMENTATION
+// ============================================================================
+
+// Long Position Tool
+if long_signal and show_signals
+    // Create Long Position Box
+    long_box = box.new(
+        left=bar_index,
+        top=long_take_profit,
+        right=bar_index + 10,
+        bottom=long_stop_loss,
+        border_color=color.green,
+        border_width=2,
+        bgcolor=color.new(color.green, 90),
+        text="LONG\nEntry: " + str.tostring(long_entry_price, "#.##") + 
+             "\nSL: " + str.tostring(long_stop_loss, "#.##") + 
+             "\nTP: " + str.tostring(long_take_profit, "#.##") + 
+             "\nRR: " + str.tostring(risk_reward_ratio, "#.#"),
+        text_color=color.white,
+        text_size=size.small
+    )
+    
+    // Create Entry Line
+    line.new(
+        x1=bar_index,
+        y1=long_entry_price,
+        x2=bar_index + 10,
+        y2=long_entry_price,
+        color=color.green,
+        width=2,
+        style=line.style_solid
+    )
+
+// Short Position Tool
+if short_signal and show_signals
+    // Create Short Position Box
+    short_box = box.new(
+        left=bar_index,
+        top=short_stop_loss,
+        right=bar_index + 10,
+        bottom=short_take_profit,
+        border_color=color.red,
+        border_width=2,
+        bgcolor=color.new(color.red, 90),
+        text="SHORT\nEntry: " + str.tostring(short_entry_price, "#.##") + 
+             "\nSL: " + str.tostring(short_stop_loss, "#.##") + 
+             "\nTP: " + str.tostring(short_take_profit, "#.##") + 
+             "\nRR: " + str.tostring(risk_reward_ratio, "#.#"),
+        text_color=color.white,
+        text_size=size.small
+    )
+    
+    // Create Entry Line
+    line.new(
+        x1=bar_index,
+        y1=short_entry_price,
+        x2=bar_index + 10,
+        y2=short_entry_price,
+        color=color.red,
+        width=2,
+        style=line.style_solid
+    )
+
+// ============================================================================
+// VISUAL ELEMENTS
+// ============================================================================
+
+// Plot Moving Averages
+plot(ema9, title="EMA 9", color=color.blue, linewidth=1)
+plot(ema21, title="EMA 21", color=color.orange, linewidth=1)
+plot(ema50, title="EMA 50", color=color.purple, linewidth=2)
+
+// Plot Order Blocks
+if show_order_blocks and is_bullish_ob
+    box.new(
+        left=bar_index - 2,
+        top=bullish_ob_high,
+        right=bar_index,
+        bottom=bullish_ob_low,
+        border_color=color.green,
+        border_width=1,
+        bgcolor=color.new(color.green, 80),
+        text="OB",
+        text_color=color.white,
+        text_size=size.tiny
+    )
+
+if show_order_blocks and is_bearish_ob
+    box.new(
+        left=bar_index - 2,
+        top=bearish_ob_high,
+        right=bar_index,
+        bottom=bearish_ob_low,
+        border_color=color.red,
+        border_width=1,
+        bgcolor=color.new(color.red, 80),
+        text="OB",
+        text_color=color.white,
+        text_size=size.tiny
+    )
+
+// Plot Fair Value Gaps
+if show_fair_value_gaps and fvg_bullish
+    box.new(
+        left=bar_index - 2,
+        top=fvg_bullish_high,
+        right=bar_index,
+        bottom=fvg_bullish_low,
+        border_color=color.lime,
+        border_width=1,
+        bgcolor=color.new(color.lime, 85),
+        text="FVG",
+        text_color=color.white,
+        text_size=size.tiny
+    )
+
+if show_fair_value_gaps and fvg_bearish
+    box.new(
+        left=bar_index - 2,
+        top=fvg_bearish_high,
+        right=bar_index,
+        bottom=fvg_bearish_low,
+        border_color=color.fuchsia,
+        border_width=1,
+        bgcolor=color.new(color.fuchsia, 85),
+        text="FVG",
+        text_color=color.white,
+        text_size=size.tiny
+    )
+
+// Plot Liquidity Levels
+if show_liquidity_levels
+    line.new(
+        x1=bar_index - 20,
+        y1=recent_high,
+        x2=bar_index,
+        y2=recent_high,
+        color=color.yellow,
+        width=1,
+        style=line.style_dashed
+    )
+    line.new(
+        x1=bar_index - 20,
+        y1=recent_low,
+        x2=bar_index,
+        y2=recent_low,
+        color=color.yellow,
+        width=1,
+        style=line.style_dashed
+    )
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+// Alert Conditions
+alertcondition(long_signal, title="Long Entry Signal", message="Long Entry Signal: {{ticker}} at {{close}}")
+alertcondition(short_signal, title="Short Entry Signal", message="Short Entry Signal: {{ticker}} at {{close}}")
+
+// ============================================================================
+// TABLE FOR SIGNAL INFORMATION
+// ============================================================================
+
+// Create Info Table
+var table info_table = table.new(position.top_right, 2, 6, bgcolor=color.white, border_width=1)
+
+if barstate.islast
+    table.cell(info_table, 0, 0, "Signal", text_color=color.black, text_size=size.small)
+    table.cell(info_table, 1, 0, long_signal ? "LONG" : short_signal ? "SHORT" : "NONE", 
+               text_color=long_signal ? color.green : short_signal ? color.red : color.gray, text_size=size.small)
+    
+    table.cell(info_table, 0, 1, "Entry Price", text_color=color.black, text_size=size.small)
+    table.cell(info_table, 1, 1, str.tostring(close, "#.##"), text_color=color.black, text_size=size.small)
+    
+    table.cell(info_table, 0, 2, "Stop Loss", text_color=color.black, text_size=size.small)
+    table.cell(info_table, 1, 2, long_signal ? str.tostring(long_stop_loss, "#.##") : 
+               short_signal ? str.tostring(short_stop_loss, "#.##") : "N/A", text_color=color.black, text_size=size.small)
+    
+    table.cell(info_table, 0, 3, "Take Profit", text_color=color.black, text_size=size.small)
+    table.cell(info_table, 1, 3, long_signal ? str.tostring(long_take_profit, "#.##") : 
+               short_signal ? str.tostring(short_take_profit, "#.##") : "N/A", text_color=color.black, text_size=size.small)
+    
+    table.cell(info_table, 0, 4, "Risk Reward", text_color=color.black, text_size=size.small)
+    table.cell(info_table, 1, 4, str.tostring(risk_reward_ratio, "#.#"), text_color=color.black, text_size=size.small)
+    
+    table.cell(info_table, 0, 5, "RSI", text_color=color.black, text_size=size.small)
+    table.cell(info_table, 1, 5, str.tostring(rsi, "#.##"), 
+               text_color=rsi > rsi_overbought ? color.red : rsi < rsi_oversold ? color.green : color.black, text_size=size.small)
+
+// ============================================================================
+// PLOT SHAPES FOR SIGNALS
+// ============================================================================
+
+plotshape(long_signal and show_signals, title="Long Signal", location=location.belowbar, 
+          color=color.green, style=shape.triangleup, size=size.normal)
+plotshape(short_signal and show_signals, title="Short Signal", location=location.abovebar, 
+          color=color.red, style=shape.triangledown, size=size.normal)
+
+// ============================================================================
+// END OF SCRIPT
+// ============================================================================
