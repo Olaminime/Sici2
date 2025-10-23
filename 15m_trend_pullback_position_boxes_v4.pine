@@ -1,0 +1,155 @@
+//@version=4
+study(title="15m Trend Pullback Position Boxes (v4)", shorttitle="TPB v4", overlay=true)
+
+//------------------------------------------------------------------------------
+// Purpose
+// - Identify 15m trend-pullback setups with RSI confirmation
+// - Compute entry, stop, and take-profit using ATR+swing logic with fixed RR
+// - Draw static Long/Short Position-like boxes (risk/reward zones) at signal bar close
+// - Provide alert conditions; repaint-safe (signals only at bar close)
+// Notes
+// - Designed for use on a 15-minute chart. It will work on others, but
+//   the model is tuned for 15m.
+// - This is an indicator (not a strategy); it draws position boxes and levels.
+//------------------------------------------------------------------------------
+
+//-----------------------------
+// Inputs
+//-----------------------------
+rr                 = input(title="Risk-Reward (TP = RR * Risk)", type=input.float, defval=2.0, minval=0.5, step=0.1)
+atrMult            = input(title="ATR Stop Multiplier", type=input.float, defval=1.5, minval=0.5, step=0.1)
+swingLen           = input(title="Swing Lookback (bars)", type=input.integer, defval=5, minval=1)
+emaFastLen         = input(title="EMA Fast", type=input.integer, defval=21, minval=1)
+emaSlowLen         = input(title="EMA Slow (Trend Filter)", type=input.integer, defval=200, minval=1)
+rsiLen             = input(title="RSI Length", type=input.integer, defval=14, minval=2)
+rsiPullbackThr     = input(title="RSI Pullback Threshold (Long)", type=input.integer, defval=45, minval=1, maxval=99)
+rsiRegainThr       = input(title="RSI Regain Threshold (Long)",  type=input.integer, defval=50, minval=1, maxval=99)
+boxBars            = input(title="Bars Width for Position Box", type=input.integer, defval=30, minval=5)
+bufferTicks        = input(title="Entry Buffer (ticks)", type=input.integer, defval=2, minval=0)
+showLevelLabels    = input(title="Show Level Labels", type=input.bool, defval=true)
+showSignalMarkers  = input(title="Show Signal Markers", type=input.bool, defval=true)
+
+// Colors
+colRisk   = color.new(color.red,   80)
+colReward = color.new(color.green, 80)
+colSL     = color.red
+colEntry  = color.orange
+colTP     = color.green
+
+//-----------------------------
+// Core signals and filters
+//-----------------------------
+emaFast = ema(close, emaFastLen)
+emaSlow = ema(close, emaSlowLen)
+rsiVal  = rsi(close, rsiLen)
+atrVal  = atr(14)
+
+trendUp   = emaFast > emaSlow and close > emaSlow
+trendDown = emaFast < emaSlow and close < emaSlow
+
+// Pullback + regain confirmations
+// Long: prior RSI pulled back below rsiPullbackThr, now regained above rsiRegainThr, and price crosses back above the fast EMA
+pulledBackLong  = rsiVal[1] <= rsiPullbackThr
+regainedLong    = rsiVal > rsiRegainThr
+crossUpFast     = crossover(close, emaFast)
+
+// Short: mirror logic using symmetric thresholds around 50
+rsiPullbackThrShort = 100 - rsiPullbackThr
+rsiRegainThrShort   = 100 - rsiRegainThr
+pulledBackShort = rsiVal[1] >= rsiPullbackThrShort
+regainedShort   = rsiVal < rsiRegainThrShort
+crossDnFast     = crossunder(close, emaFast)
+
+// Final bar-close signals (repaint-safe)
+longSignal  = barstate.isconfirmed and trendUp   and pulledBackLong  and regainedLong  and crossUpFast
+shortSignal = barstate.isconfirmed and trendDown and pulledBackShort and regainedShort and crossDnFast
+
+//-----------------------------
+// Helpers
+//-----------------------------
+pi() => syminfo.mintick
+bufTicks = pi() * bufferTicks
+
+// Compute Long levels (at signal bar)
+calcLong(entrySrc, slSwingLen, rrInput, atrMultInput) =>
+    entryPrice   = entrySrc + bufTicks
+    swingSL      = lowest(low, slSwingLen)
+    atrSL        = entryPrice - atrMultInput * atrVal
+    stopPrice    = min(swingSL, atrSL)
+    risk         = entryPrice - stopPrice
+    tpPrice      = risk > 0 ? entryPrice + rrInput * risk : na
+    [entryPrice, stopPrice, tpPrice]
+
+// Compute Short levels (at signal bar)
+calcShort(entrySrc, slSwingLen, rrInput, atrMultInput) =>
+    entryPrice   = entrySrc - bufTicks
+    swingSL      = highest(high, slSwingLen)
+    atrSL        = entryPrice + atrMultInput * atrVal
+    stopPrice    = max(swingSL, atrSL)
+    risk         = stopPrice - entryPrice
+    tpPrice      = risk > 0 ? entryPrice - rrInput * risk : na
+    [entryPrice, stopPrice, tpPrice]
+
+// Draw a static position box and level lines
+// x1 = signal bar index, x2 = x1 + boxBars
+plotPosition(isLong, x1, entryPrice, stopPrice, tpPrice) =>
+    x2 = x1 + boxBars
+
+    // Risk and reward boxes
+    if isLong
+        // Risk area: from SL to Entry
+        box.new(x1=x1, y1=stopPrice, x2=x2, y2=entryPrice, xloc=xloc.bar_index, border_color=colSL,   bgcolor=colRisk)
+        // Reward area: from Entry to TP
+        box.new(x1=x1, y1=entryPrice, x2=x2, y2=tpPrice,   xloc=xloc.bar_index, border_color=colTP,   bgcolor=colReward)
+    else
+        // Risk area: from Entry to SL (above entry)
+        box.new(x1=x1, y1=entryPrice, x2=x2, y2=stopPrice, xloc=xloc.bar_index, border_color=colSL,   bgcolor=colRisk)
+        // Reward area: from TP to Entry
+        box.new(x1=x1, y1=tpPrice,    x2=x2, y2=entryPrice, xloc=xloc.bar_index, border_color=colTP,   bgcolor=colReward)
+
+    // Level lines
+    line.new(x1=x1, y1=stopPrice, x2=x2, y2=stopPrice, xloc=xloc.bar_index, color=colSL,   width=2)
+    line.new(x1=x1, y1=entryPrice, x2=x2, y2=entryPrice, xloc=xloc.bar_index, color=colEntry, width=2)
+    line.new(x1=x1, y1=tpPrice,   x2=x2, y2=tpPrice,   xloc=xloc.bar_index, color=colTP,   width=2)
+
+    // Optional labels for readability
+    if showLevelLabels
+        labelStyle = label.style_label_left
+        label.new(x=x2, y=stopPrice,  text="SL",    xloc=xloc.bar_index, style=labelStyle, color=colSL,   textcolor=color.white)
+        label.new(x=x2, y=entryPrice, text="ENTRY", xloc=xloc.bar_index, style=labelStyle, color=colEntry, textcolor=color.white)
+        label.new(x=x2, y=tpPrice,    text="TP (RR=" + tostring(rr) + ")", xloc=xloc.bar_index, style=labelStyle, color=colTP,   textcolor=color.white)
+
+//-----------------------------
+// Execute on signals (bar close only)
+//-----------------------------
+if longSignal
+    longEntrySrc = high
+    [le, ls, lt] = calcLong(longEntrySrc, swingLen, rr, atrMult)
+    validLong = not na(le) and not na(ls) and not na(lt) and le > ls and lt > le
+    if validLong
+        plotPosition(true, bar_index, le, ls, lt)
+
+if shortSignal
+    shortEntrySrc = low
+    [se, ss, st] = calcShort(shortEntrySrc, swingLen, rr, atrMult)
+    validShort = not na(se) and not na(ss) and not na(st) and ss > se and se > st
+    if validShort
+        plotPosition(false, bar_index, se, ss, st)
+
+//-----------------------------
+// Visual signal markers
+//-----------------------------
+plotshape(showSignalMarkers and longSignal,  title="Long Setup",  style=shape.triangleup,   color=color.green, size=size.tiny, location=location.belowbar, text="LONG")
+plotshape(showSignalMarkers and shortSignal, title="Short Setup", style=shape.triangledown, color=color.red,   size=size.tiny, location=location.abovebar, text="SHORT")
+
+//-----------------------------
+// Alerts
+//-----------------------------
+alertcondition(longSignal,  title="TPB v4 Long Setup",  message="15m Long setup on {{ticker}}. Entry=high+buffer, SL= swing/ATR, TP= RR*risk.")
+alertcondition(shortSignal, title="TPB v4 Short Setup", message="15m Short setup on {{ticker}}. Entry=low-buffer, SL= swing/ATR, TP= RR*risk.")
+
+//-----------------------------
+// Trend/RSi context plots (optional, kept light)
+//-----------------------------
+plot(emaFast, color=color.orange, title="EMA Fast")
+plot(emaSlow, color=color.blue,   title="EMA Slow")
