@@ -1,0 +1,260 @@
+//@version=4
+indicator("Smart Trade Setup Indicator", shorttitle="STS", overlay=true, max_boxes_count=50, max_lines_count=50)
+
+// ============================================================================
+// INPUT PARAMETERS
+// ============================================================================
+
+// RSI Settings
+rsi_length = input(14, "RSI Length", minval=1)
+rsi_overbought = input(70, "RSI Overbought Level", minval=50, maxval=100)
+rsi_oversold = input(30, "RSI Oversold Level", minval=0, maxval=50)
+
+// Moving Average Settings
+ema_fast = input(9, "Fast EMA Length", minval=1)
+ema_slow = input(21, "Slow EMA Length", minval=1)
+ema_trend = input(50, "Trend EMA Length", minval=1)
+
+// Volume Settings
+volume_ma_length = input(20, "Volume MA Length", minval=1)
+volume_threshold = input(1.5, "Volume Threshold Multiplier", minval=1.0, step=0.1)
+
+// Risk Management
+risk_reward_ratio = input(2.0, "Risk:Reward Ratio", minval=1.0, step=0.1)
+atr_length = input(14, "ATR Length for Stop Loss", minval=1)
+atr_multiplier = input(2.0, "ATR Multiplier for Stop Loss", minval=0.5, step=0.1)
+
+// Smart Money Concepts
+liquidity_lookback = input(20, "Liquidity Sweep Lookback", minval=5)
+break_structure_threshold = input(0.001, "Break Structure Threshold", minval=0.0001, step=0.0001)
+
+// Display Settings
+show_signals = input(true, "Show Entry Signals")
+show_levels = input(true, "Show Support/Resistance Levels")
+show_boxes = input(true, "Show Position Boxes")
+
+// ============================================================================
+// TECHNICAL INDICATORS
+// ============================================================================
+
+// RSI
+rsi = rsi(close, rsi_length)
+
+// Moving Averages
+ema_fast_line = ema(close, ema_fast)
+ema_slow_line = ema(close, ema_slow)
+ema_trend_line = ema(close, ema_trend)
+
+// ATR for stop loss calculation
+atr = atr(atr_length)
+
+// Volume Analysis
+volume_ma = sma(volume, volume_ma_length)
+high_volume = volume > volume_ma * volume_threshold
+
+// ============================================================================
+// SMART MONEY CONCEPTS (SMC) FUNCTIONS
+// ============================================================================
+
+// Function to find swing highs and lows
+is_swing_high = high > high[1] and high > high[2] and high > high[3] and high > high[4]
+is_swing_low = low < low[1] and low < low[2] and low < low[3] and low < low[4]
+
+// Function to detect liquidity sweeps
+liquidity_sweep_up = high > highest(high[1], liquidity_lookback) and close < close[1]
+liquidity_sweep_down = low < lowest(low[1], liquidity_lookback) and close > close[1]
+
+// Function to detect break of structure (BOS)
+bos_bullish = low < low[1] and close > high[1] and close > ema_trend_line
+bos_bearish = high > high[1] and close < low[1] and close < ema_trend_line
+
+// Function to detect change of character (CHoCH)
+choch_bullish = low < low[1] and close > high[1] and close > ema_trend_line and rsi > 50
+choch_bearish = high > high[1] and close < low[1] and close < ema_trend_line and rsi < 50
+
+// ============================================================================
+// SUPPORT AND RESISTANCE LEVELS
+// ============================================================================
+
+// Find recent swing highs and lows for S/R levels
+var float resistance_level = na
+var float support_level = na
+
+if is_swing_high
+    resistance_level := high
+if is_swing_low
+    support_level := low
+
+// ============================================================================
+// TREND ANALYSIS
+// ============================================================================
+
+// Overall trend direction
+trend_bullish = ema_fast_line > ema_slow_line and ema_slow_line > ema_trend_line and close > ema_trend_line
+trend_bearish = ema_fast_line < ema_slow_line and ema_slow_line < ema_trend_line and close < ema_trend_line
+
+// Momentum confirmation
+momentum_bullish = rsi > 50 and rsi < rsi_overbought
+momentum_bearish = rsi < 50 and rsi > rsi_oversold
+
+// ============================================================================
+// ENTRY SIGNAL LOGIC
+// ============================================================================
+
+// Long Entry Conditions
+long_condition_1 = trend_bullish and momentum_bullish
+long_condition_2 = (liquidity_sweep_down or bos_bullish or choch_bullish)
+long_condition_3 = high_volume and close > ema_fast_line
+long_condition_4 = rsi > 45 and rsi < 65
+
+long_entry = long_condition_1 and long_condition_2 and long_condition_3 and long_condition_4
+
+// Short Entry Conditions
+short_condition_1 = trend_bearish and momentum_bearish
+short_condition_2 = (liquidity_sweep_up or bos_bearish or choch_bearish)
+short_condition_3 = high_volume and close < ema_fast_line
+short_condition_4 = rsi < 55 and rsi > 35
+
+short_entry = short_condition_1 and short_condition_2 and short_condition_3 and short_condition_4
+
+// ============================================================================
+// RISK MANAGEMENT CALCULATIONS
+// ============================================================================
+
+// Calculate stop loss levels
+long_stop_loss = close - (atr * atr_multiplier)
+short_stop_loss = close + (atr * atr_multiplier)
+
+// Calculate take profit levels based on risk-reward ratio
+long_take_profit = close + ((close - long_stop_loss) * risk_reward_ratio)
+short_take_profit = close - ((short_stop_loss - close) * risk_reward_ratio)
+
+// ============================================================================
+// POSITION MANAGEMENT
+// ============================================================================
+
+var bool in_long_position = false
+var bool in_short_position = false
+var float entry_price = na
+var float stop_loss_price = na
+var float take_profit_price = na
+var int position_start_bar = na
+
+// Long Position Management
+if long_entry and not in_long_position and not in_short_position
+    in_long_position := true
+    entry_price := close
+    stop_loss_price := long_stop_loss
+    take_profit_price := long_take_profit
+    position_start_bar := bar_index
+
+// Short Position Management
+if short_entry and not in_short_position and not in_long_position
+    in_short_position := true
+    entry_price := close
+    stop_loss_price := short_stop_loss
+    take_profit_price := short_take_profit
+    position_start_bar := bar_index
+
+// Exit conditions
+if in_long_position
+    if close <= stop_loss_price or close >= take_profit_price
+        in_long_position := false
+        entry_price := na
+        stop_loss_price := na
+        take_profit_price := na
+        position_start_bar := na
+
+if in_short_position
+    if close >= stop_loss_price or close <= take_profit_price
+        in_short_position := false
+        entry_price := na
+        stop_loss_price := na
+        take_profit_price := na
+        position_start_bar := na
+
+// ============================================================================
+// VISUAL ELEMENTS
+// ============================================================================
+
+// Plot moving averages
+plot(ema_fast_line, "Fast EMA", color=color.blue, linewidth=1)
+plot(ema_slow_line, "Slow EMA", color=color.orange, linewidth=1)
+plot(ema_trend_line, "Trend EMA", color=color.red, linewidth=2)
+
+// Plot support and resistance levels
+plot(support_level, "Support Level", color=color.green, linewidth=1, style=plot.style_line)
+plot(resistance_level, "Resistance Level", color=color.red, linewidth=1, style=plot.style_line)
+
+// Entry signals
+plotshape(long_entry and show_signals, "Long Entry", shape.triangleup, location.belowbar, color.green, size=size.normal)
+plotshape(short_entry and show_signals, "Short Entry", shape.triangledown, location.abovebar, color.red, size=size.normal)
+
+// Position boxes
+if in_long_position and show_boxes
+    box.new(position_start_bar, stop_loss_price, bar_index, take_profit_price, 
+            border_color=color.green, bgcolor=color.new(color.green, 90), border_width=2)
+    line.new(position_start_bar, entry_price, bar_index, entry_price, 
+             color=color.green, width=2, style=line.style_solid)
+
+if in_short_position and show_boxes
+    box.new(position_start_bar, take_profit_price, bar_index, stop_loss_price, 
+            border_color=color.red, bgcolor=color.new(color.red, 90), border_width=2)
+    line.new(position_start_bar, entry_price, bar_index, entry_price, 
+             color=color.red, width=2, style=line.style_dashed)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+// Long position alerts
+alertcondition(long_entry, title="Long Entry Signal", message="Long entry signal detected - Consider opening long position")
+
+// Short position alerts
+alertcondition(short_entry, title="Short Entry Signal", message="Short entry signal detected - Consider opening short position")
+
+// Position exit alerts
+alertcondition(in_long_position and (close <= stop_loss_price or close >= take_profit_price), 
+               title="Long Position Exit", message="Long position exit conditions met")
+
+alertcondition(in_short_position and (close >= stop_loss_price or close <= take_profit_price), 
+               title="Short Position Exit", message="Short position exit conditions met")
+
+// ============================================================================
+// INFORMATION TABLE
+// ============================================================================
+
+if barstate.islast and show_signals
+    var table info_table = table.new(position.top_right, 2, 8, bgcolor=color.white, border_width=1)
+    
+    table.cell(info_table, 0, 0, "Indicator Status", text_color=color.black, text_size=size.small)
+    table.cell(info_table, 1, 0, "Value", text_color=color.black, text_size=size.small)
+    
+    table.cell(info_table, 0, 1, "RSI", text_color=color.black, text_size=size.small)
+    table.cell(info_table, 1, 1, str.tostring(math.round(rsi, 2)), text_color=color.black, text_size=size.small)
+    
+    table.cell(info_table, 0, 2, "Trend", text_color=color.black, text_size=size.small)
+    trend_text = trend_bullish ? "Bullish" : trend_bearish ? "Bearish" : "Neutral"
+    table.cell(info_table, 1, 2, trend_text, text_color=trend_bullish ? color.green : trend_bearish ? color.red : color.gray, text_size=size.small)
+    
+    table.cell(info_table, 0, 3, "Volume", text_color=color.black, text_size=size.small)
+    volume_text = high_volume ? "High" : "Normal"
+    table.cell(info_table, 1, 3, volume_text, text_color=high_volume ? color.orange : color.gray, text_size=size.small)
+    
+    table.cell(info_table, 0, 4, "Position", text_color=color.black, text_size=size.small)
+    position_text = in_long_position ? "Long" : in_short_position ? "Short" : "None"
+    table.cell(info_table, 1, 4, position_text, text_color=in_long_position ? color.green : in_short_position ? color.red : color.gray, text_size=size.small)
+    
+    if in_long_position or in_short_position
+        table.cell(info_table, 0, 5, "Entry Price", text_color=color.black, text_size=size.small)
+        table.cell(info_table, 1, 5, str.tostring(entry_price, "#.##"), text_color=color.black, text_size=size.small)
+        
+        table.cell(info_table, 0, 6, "Stop Loss", text_color=color.black, text_size=size.small)
+        table.cell(info_table, 1, 6, str.tostring(stop_loss_price, "#.##"), text_color=color.red, text_size=size.small)
+        
+        table.cell(info_table, 0, 7, "Take Profit", text_color=color.black, text_size=size.small)
+        table.cell(info_table, 1, 7, str.tostring(take_profit_price, "#.##"), text_color=color.green, text_size=size.small)
+
+// ============================================================================
+// END OF SCRIPT
+// ============================================================================
