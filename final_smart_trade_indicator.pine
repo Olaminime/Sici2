@@ -1,5 +1,5 @@
 //@version=4
-indicator("Enhanced Smart Trade Setup Indicator", shorttitle="ESTS", overlay=true, max_boxes_count=100, max_lines_count=100)
+indicator("Smart Trade Setup Indicator", shorttitle="STS", overlay=true, max_boxes_count=100, max_lines_count=100)
 
 // ============================================================================
 // INPUT PARAMETERS
@@ -260,11 +260,9 @@ alertcondition(long_entry, title="Long Entry Signal", message="Long entry signal
 alertcondition(short_entry, title="Short Entry Signal", message="Short entry signal detected")
 
 // Position exit alerts
-alertcondition(in_long_position and (close <= stop_loss_price or close >= take_profit_price), 
-               title="Long Position Exit", message="Long position exit conditions met")
+alertcondition(in_long_position and (close <= stop_loss_price or close >= take_profit_price), title="Long Position Exit", message="Long position exit conditions met")
 
-alertcondition(in_short_position and (close >= stop_loss_price or close <= take_profit_price), 
-               title="Short Position Exit", message="Short position exit conditions met")
+alertcondition(in_short_position and (close >= stop_loss_price or close <= take_profit_price), title="Short Position Exit", message="Short position exit conditions met")
 
 // ============================================================================
 // INFORMATION TABLE
