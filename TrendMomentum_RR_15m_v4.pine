@@ -123,11 +123,11 @@ f_makeShortLevels(_entry, _pivot, _atr) =>
 
 // ----------------------- Drawing management ---------------------------
 var int   maxSignals = 20
-var linesSL   = array.new_line()
-var linesEN   = array.new_line()
-var linesTP1  = array.new_line()
-var linesTP2  = array.new_line()
-var sigLabels = array.new_label()
+var linesSL   = array.new_line(0)
+var linesEN   = array.new_line(0)
+var linesTP1  = array.new_line(0)
+var linesTP2  = array.new_line(0)
+var sigLabels = array.new_label(0)
 
 f_trimArrays() =>
     extraSL = array.size(linesSL) - maxSignals
